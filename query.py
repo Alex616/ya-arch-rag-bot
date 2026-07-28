@@ -1,45 +1,60 @@
+"""CLI example: ask a question and get an answer from the RAG assistant.
+
+Uses the reusable `RAGAssistant` class from `rag.py`, making it trivial to
+migrate the same flow into a Telegram bot handler.
+"""
+
+import argparse
 import sys
 
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-
-# Конфигурация должна совпадать с build_index.py
-PERSIST_DIR = "chroma.db"
-COLLECTION_NAME = "knowledge_base"
-EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-# Поисковый запрос по умолчанию (на русском, как и база знаний)
 DEFAULT_QUERY = "Кто такой Мясник из Беловежа и чем он занимается?"
 
 
 def main() -> None:
-    query = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_QUERY
+    # Local import keeps the script runnable as a standalone CLI example.
+    # In a Telegram bot import RAGAssistant at module level once.
+    from rag import RAGAssistant  # pyright: ignore[reportMissingImports]
 
-    print(f"Запрос: {query}\n")
-
-    embeddings = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
+    parser = argparse.ArgumentParser(
+        description="RAG-запрос: поиск по индексу + ответ YandexGPT"
     )
-
-    vectorstore = Chroma(
-        persist_directory=PERSIST_DIR,
-        embedding_function=embeddings,
-        collection_name=COLLECTION_NAME,
+    parser.add_argument(
+        "query",
+        nargs="*",
+        help="Текстовый запрос пользователя (если не указан — используется запрос по умолчанию)",
     )
+    parser.add_argument(
+        "--k",
+        type=int,
+        default=5,
+        help="Количество чанков, которые передаются в контекст LLM (по умолчанию 5)",
+    )
+    args = parser.parse_args()
 
-    results = vectorstore.similarity_search(query, k=5)
+    query_text = " ".join(args.query) if args.query else DEFAULT_QUERY
 
-    print(f"Найдено релевантных чанков: {len(results)}\n")
-    for i, doc in enumerate(results, 1):
-        source = doc.metadata.get("source", "unknown")
-        content = doc.page_content.strip()
-        preview = content if len(content) <= 500 else content[:500].rstrip() + "…"
-        print(f"--- Результат {i} (источник: {source}) ---")
-        print(preview)
-        print()
+    # Создаём один экземпляр ассистента. В Telegram-боте его стоит создавать
+    # один раз при старте приложения, чтобы не перезагружать эмбеддинг-модель.
+    assistant = RAGAssistant(k=args.k)
+    response = assistant.ask(query_text)
+
+    print(f"Запрос: {response['query']}\n")
+    print("=" * 60)
+    print(response["answer"])
+    print("=" * 60)
+    print("\nИспользованные чанки:")
+    for i, src in enumerate(response["sources"], 1):
+        content = src["content"]
+        preview = (content[:300] + "…") if len(content) > 300 else content
+        print(f"{i}. {src['source']}: {preview.replace(chr(10), ' ')}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nПрервано пользователем", file=sys.stderr)
+        sys.exit(130)
+    except ValueError as exc:
+        print(f"Ошибка конфигурации: {exc}", file=sys.stderr)
+        sys.exit(1)
