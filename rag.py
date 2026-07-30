@@ -1,8 +1,8 @@
-"""Reusable RAG assistant for the Telegram bot.
+"""Переиспользуемый RAG-ассистент для Telegram-бота.
 
-Encapsulates embedding → Chroma retrieval → prompt building → YandexGPT
-(LLM called through the OpenAI-compatible API endpoint) inside a single
-class that can be imported by the bot handler.
+Инкапсулирует цепочку: эмбеддинг → поиск в Chroma → построение промпта
+→ вызов YandexGPT (через OpenAI-совместимый endpoint) в одном классе,
+который можно импортировать из хендлера бота.
 """
 
 from __future__ import annotations
@@ -21,25 +21,27 @@ from pydantic import SecretStr
 
 from few_shot_examples import FEW_SHOT_EXAMPLES
 
-# Load environment variables from .env file, if present.
+# Загружаем переменные окружения из .env, если файл есть.
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# These defaults mirror the values used in build_index.py so the embedding
-# model and the vector DB collection are consistent.
+# Эти значения по умолчанию совпадают с build_index.py, чтобы модель
+# эмбеддингов и коллекция векторной БД были согласованы.
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_PERSIST_DIR = Path("chroma.db")
 DEFAULT_COLLECTION_NAME = "knowledge_base"
 
 
 def _default_k() -> int:
+    """Прочитать K_RETRIEVER из окружения или вернуть 5."""
     raw = os.getenv("K_RETRIEVER", "5")
     try:
         return int(raw)
     except ValueError as exc:
         raise ValueError(
-            f"Environment variable K_RETRIEVER must be an integer, got {raw!r}"
+            f"Переменная окружения K_RETRIEVER должна быть целым числом, "
+            f"получено {raw!r}"
         ) from exc
 
 
@@ -50,37 +52,60 @@ DEFAULT_TEMPERATURE = 0.1
 DEFAULT_MAX_TOKENS = 1500
 
 
-def _build_prompt_template(few_shot_examples: str | None = None) -> str:
-    """Build the "stuff" chain prompt with optional few-shot examples.
+def _split_reasoning_answer(text: str) -> tuple[str, str]:
+    """Разделить вывод модели на рассуждение и финальный ответ.
 
-    {context} is filled by RetrievalQA with the concatenated retrieved
-    chunks; {question} is the user query.
+    Модель должна сгенерировать рассуждение и явный маркер "Ответ:".
+    Если маркер отсутствует, весь текст считается ответом.
+    """
+    if "Ответ:" not in text:
+        return (text, text)
+
+    reasoning, _, answer = text.rpartition("Ответ:")
+    reasoning = reasoning.strip()
+    # Убираем ведущую метку "Рассуждение:", если она есть.
+    if reasoning.lower().startswith("рассуждение:"):
+        reasoning = reasoning[len("Рассуждение:") :].strip()
+    return (reasoning, answer.strip())
+
+
+def _build_prompt_template(few_shot_examples: str | None = None) -> str:
+    """Собрать промпт для stuff-цепочки с опциональными few-shot примерами.
+
+    {context} подменяется RetrievalQA на склеенные найденные чанки;
+    {question} — вопрос пользователя.
     """
     if few_shot_examples:
         examples_block = (
-            "\n\nНиже приведены примеры того, как отвечать на основе "
-            "фрагментов базы знаний:\n\n" + few_shot_examples.strip() + "\n\n"
+            "\n\nНиже приведены примеры того, как сначала рассуждать, а "
+            "затем отвечать на основе фрагментов базы знаний:\n\n"
+            + few_shot_examples.strip()
+            + "\n\n"
         )
     else:
         examples_block = "\n\n"
 
     return (
         "Ты — корпоративный помощник на основе внутренней базы знаний.\n"
-        "Ответь на вопрос сотрудника, опираясь ТОЛЬКО на приведённые ниже фрагменты.\n"
-        "Если фрагментов недостаточно для ответа, честно скажи, что не знаешь ответа.\n"
+        "Сначала проведи пошаговое рассуждение на основе приведённых ниже "
+        "фрагментов, а затем сформулируй чёткий ответ.\n"
+        "Опирайся ТОЛЬКО на эти фрагменты.\n"
+        "Если фрагментов недостаточно для ответа, честно скажи, что не знаешь "
+        "ответа.\n"
         "Не придумывай факты и не используй внешние знания."
         + examples_block
         + "Фрагменты базы знаний:\n"
         "{context}\n\n"
         "Вопрос: {question}\n\n"
-        "Ответ:"
+        "Рассуждение:"
     )
 
 
 class RAGAssistant:
-    """RAG assistant backed by ChromaDB and YandexGPT OpenAI-compatible API.
+    """RAG-ассистент на базе ChromaDB и YandexGPT (OpenAI-совместимый API).
 
-    Typical Telegram-bot usage (create **one** instance at startup):
+    Типичное использование в Telegram-боте (создавайте **один** экземпляр
+    при старте):
 
         from rag import RAGAssistant
 
@@ -96,7 +121,7 @@ class RAGAssistant:
     def _parse_float_env(
         var_name: str, default: float, override: float | None = None
     ) -> float:
-        """Parse an optional float from environment, falling back to default."""
+        """Прочитать float из окружения или вернуть значение по умолчанию."""
         value = override if override is not None else os.getenv(var_name)
         if value is None or value == "":
             return default
@@ -104,12 +129,13 @@ class RAGAssistant:
             return float(value)  # type: ignore[arg-type]
         except ValueError as exc:
             raise ValueError(
-                f"Environment variable {var_name} must be a number, got {value!r}"
+                f"Переменная окружения {var_name} должна быть числом, "
+                f"получено {value!r}"
             ) from exc
 
     @staticmethod
     def _parse_int_env(var_name: str, default: int, override: int | None = None) -> int:
-        """Parse an optional int from environment, falling back to default."""
+        """Прочитать int из окружения или вернуть значение по умолчанию."""
         value = override if override is not None else os.getenv(var_name)
         if value is None or value == "":
             return default
@@ -117,7 +143,8 @@ class RAGAssistant:
             return int(value)  # type: ignore[arg-type]
         except ValueError as exc:
             raise ValueError(
-                f"Environment variable {var_name} must be an integer, got {value!r}"
+                f"Переменная окружения {var_name} должна быть целым числом, "
+                f"получено {value!r}"
             ) from exc
 
     def __init__(
@@ -142,7 +169,7 @@ class RAGAssistant:
 
         if not self.persist_dir.exists():
             raise FileNotFoundError(
-                f"Chroma persist directory not found: {self.persist_dir.absolute()}"
+                f"Не найдена persist-директория Chroma: {self.persist_dir.absolute()}"
             )
 
         self._api_key = api_key or os.getenv("YANDEX_API_KEY")
@@ -159,18 +186,18 @@ class RAGAssistant:
 
         if not self._api_key:
             raise ValueError(
-                "Yandex API key is required. Set the YANDEX_API_KEY environment "
-                "variable or pass api_key=... to RAGAssistant."
+                "Требуется API-ключ Yandex. Задайте переменную окружения "
+                "YANDEX_API_KEY или передайте api_key=... в RAGAssistant."
             )
 
-        logger.info("Loading embedding model: %s", self.embedding_model)
+        logger.info("Загрузка модели эмбеддингов: %s", self.embedding_model)
         self.embeddings = HuggingFaceEmbeddings(
             model_name=self.embedding_model,
             model_kwargs={"device": "cpu"},
             encode_kwargs={"normalize_embeddings": True},
         )
 
-        logger.info("Loading Chroma vector store from %s", self.persist_dir)
+        logger.info("Загрузка векторного хранилища Chroma из %s", self.persist_dir)
         self.vectorstore = Chroma(
             persist_directory=str(self.persist_dir),
             embedding_function=self.embeddings,
@@ -180,7 +207,7 @@ class RAGAssistant:
             search_kwargs={"k": self.k},
         )
 
-        logger.info("Initializing YandexGPT model: %s", self._model_name)
+        logger.info("Инициализация модели YandexGPT: %s", self._model_name)
         self.llm = ChatOpenAI(
             model=self._model_name,
             api_key=SecretStr(self._api_key),
@@ -194,7 +221,7 @@ class RAGAssistant:
             input_variables=["context", "question"],
         )
 
-        # Ready-made LangChain retrieval chain.
+        # Готовая retrieval-цепочка LangChain.
         self.qa_chain = RetrievalQA.from_chain_type(
             llm=self.llm,
             retriever=self.retriever,
@@ -204,12 +231,13 @@ class RAGAssistant:
         )
 
     def ask(self, query: str) -> dict:
-        """Answer a user query.
+        """Ответить на вопрос пользователя с помощью retrieval + CoT.
 
-        Returns a dict with the generated answer and the retrieved sources:
+        Возвращает словарь с рассуждением, ответом и найденными источниками:
 
             {
                 "query": "...",
+                "reasoning": "пошаговое рассуждение на основе фрагментов",
                 "answer": "...",
                 "sources": [
                     {"source": "article_005.txt", "content": "..."},
@@ -218,12 +246,13 @@ class RAGAssistant:
             }
         """
         if not query or not query.strip():
-            raise ValueError("Query text must not be empty.")
+            raise ValueError("Текст запроса не должен быть пустым.")
 
         query = query.strip()
         result = self.qa_chain.invoke({"query": query})
 
-        answer = (result.get("result") or "").strip()
+        raw_output = (result.get("result") or "").strip()
+        reasoning, answer = _split_reasoning_answer(raw_output)
         sources = [
             {
                 "source": doc.metadata.get("source", "unknown"),
@@ -232,11 +261,16 @@ class RAGAssistant:
             for doc in result.get("source_documents", [])
         ]
 
-        return {"query": query, "answer": answer, "sources": sources}
+        return {
+            "query": query,
+            "reasoning": reasoning,
+            "answer": answer,
+            "sources": sources,
+        }
 
 
 def main() -> None:
-    """CLI sanity check: run a single query."""
+    """Проверка из командной строки: один запрос."""
     import sys
 
     default_query = "Кто такой Мясник из Беловежа и чем он занимается?"

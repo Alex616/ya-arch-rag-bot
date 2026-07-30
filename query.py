@@ -1,7 +1,7 @@
-"""CLI example: ask a question and get an answer from the RAG assistant.
+"""CLI-скрипт: задать вопрос и получить ответ от RAG-ассистента.
 
-Uses the reusable `RAGAssistant` class from `rag.py`, making it trivial to
-migrate the same flow into a Telegram bot handler.
+Использует класс `RAGAssistant` из `rag.py`, поэтому тот же код легко
+перенести в хендлер Telegram-бота.
 """
 
 import argparse
@@ -11,8 +11,8 @@ DEFAULT_QUERY = "Кто такой Мясник из Беловежа и чем 
 
 
 def main() -> None:
-    # Local import keeps the script runnable as a standalone CLI example.
-    # In a Telegram bot import RAGAssistant at module level once.
+    # Локальный импорт позволяет запускать скрипт как самостоятельный пример.
+    # В Telegram-боте импортируйте RAGAssistant один раз на уровне модуля.
     from rag import RAGAssistant  # pyright: ignore[reportMissingImports]
 
     parser = argparse.ArgumentParser(
@@ -29,6 +29,11 @@ def main() -> None:
         default=5,
         help="Количество чанков, которые передаются в контекст LLM (по умолчанию 5)",
     )
+    parser.add_argument(
+        "--reasoning",
+        action="store_true",
+        help="Также вывести пошаговое рассуждение модели (Chain-of-Thought)",
+    )
     args = parser.parse_args()
 
     query_text = " ".join(args.query) if args.query else DEFAULT_QUERY
@@ -39,6 +44,12 @@ def main() -> None:
     response = assistant.ask(query_text)
 
     print(f"Запрос: {response['query']}\n")
+    if args.reasoning and response.get("reasoning"):
+        print("Рассуждение:")
+        print("-" * 60)
+        print(response["reasoning"])
+        print("-" * 60)
+        print("\nОтвет:")
     print("=" * 60)
     print(response["answer"])
     print("=" * 60)
