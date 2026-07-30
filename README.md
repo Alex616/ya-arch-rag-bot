@@ -17,6 +17,9 @@
   embeddings → Chroma → RetrievalQA → YandexGPT (OpenAI-совместимый API),
   готовый к импорту в Telegram-бот.
 - Добавлен `query.py` — CLI-скрипт, демонстрирующий работу `rag.py`.
+- Добавлен `bot.py` — готовый Telegram-бот на `aiogram` 3.x, который
+  создаёт `RAGAssistant` один раз при старте и отвечает на вопросы
+  пользователей.
 
 ## Файлы
 
@@ -26,7 +29,8 @@
 | `build_index.py` | Собирает чанки и сохраняет индекс в `chroma.db/`. |
 | `chroma.db/` | Персистентная БД ChromaDB (генерируется). |
 | `query.py` | CLI-скрипт: RAG-запрос + ответ от YandexGPT. |
-| `rag.py` | Reusable RAG-модуль, который можно импортировать в Telegram-бот. |
+| `rag.py` | RAG-модуль для импорта в Telegram-бот. |
+| `bot.py` | Готовый Telegram-бот на `aiogram` 3.x. |
 | `few_shot_examples.py` | Статические few-shot примеры для промпта RetrievalQA. |
 | `.env.example` | Пример переменных окружения для работы с YandexGPT. |
 | `pyproject.toml` | Зависимости Poetry. |
@@ -160,9 +164,43 @@ assistant = RAGAssistant(few_shot_examples=custom_examples)
 assistant = RAGAssistant(few_shot_examples=None)
 ```
 
-## Использование в Telegram-боте
+## Telegram-бот
 
-`RAGAssistant` можно создать один раз при старте бота и вызывать из хендлера:
+Для удобства интерактивного общения добавлен готовый бот `bot.py`.
+
+### 4.1. Настройка
+
+1. Создайте бота в Telegram через [@BotFather](https://t.me/BotFather) и
+   скопируйте токен.
+2. Добавьте токен в `.env`:
+
+```bash
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+```
+
+### 4.2. Запуск
+
+```bash
+poetry run python bot.py
+```
+
+При старте бот:
+
+- инициализирует `RAGAssistant` один раз (загружается эмбеддинг-модель и
+  индекс Chroma);
+- начинает polling сообщений из Telegram.
+
+### 4.3. Использование
+
+- Отправьте `/start` или `/help`, чтобы получить приветственное сообщение.
+- Отправьте любой текстовый вопрос — бот покажет «Думаю…», найдёт
+  релевантные фрагменты в базе знаний и вернёт финальный ответ.
+- Длинные ответы автоматически разбиваются на несколько сообщений, чтобы
+  уложиться в лимит Telegram (4096 символов).
+
+### 4.4. Встраивание в свой бот
+
+`RAGAssistant` можно импортировать и использовать в собственном хендлере:
 
 ```python
 from aiogram import Bot, Dispatcher, types
@@ -180,7 +218,7 @@ async def handle(message: types.Message) -> None:
     if not message.text:
         return
     result = assistant.ask(message.text)
-    # Можно добавить сноски с источниками из result["sources"]
+    # result["sources"] содержит использованные фрагменты
     await message.answer(result["answer"])
 
 
