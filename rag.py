@@ -17,6 +17,9 @@ from langchain_chroma import Chroma
 from langchain_core.prompts import PromptTemplate
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
+
+from few_shot_examples import FEW_SHOT_EXAMPLES
 
 # Load environment variables from .env file, if present.
 load_dotenv()
@@ -46,19 +49,32 @@ DEFAULT_YANDEX_BASE_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1"
 DEFAULT_TEMPERATURE = 0.1
 DEFAULT_MAX_TOKENS = 1500
 
-# Prompt for the "stuff" chain.  {context} is filled by RetrievalQA
-# with the concatenated retrieved chunks; {question} is the user query.
-PROMPT_TEMPLATE = """Ты — корпоративный помощник на основе внутренней базы знаний.
-Ответь на вопрос сотрудника, опираясь ТОЛЬКО на приведённые ниже фрагменты.
-Если фрагментов недостаточно для ответа, честно скажи, что не знаешь ответа.
-Не придумывай факты и не используй внешние знания.
 
-Фрагменты базы знаний:
-{context}
+def _build_prompt_template(few_shot_examples: str | None = None) -> str:
+    """Build the "stuff" chain prompt with optional few-shot examples.
 
-Вопрос: {question}
+    {context} is filled by RetrievalQA with the concatenated retrieved
+    chunks; {question} is the user query.
+    """
+    if few_shot_examples:
+        examples_block = (
+            "\n\nНиже приведены примеры того, как отвечать на основе "
+            "фрагментов базы знаний:\n\n" + few_shot_examples.strip() + "\n\n"
+        )
+    else:
+        examples_block = "\n\n"
 
-Ответ:"""
+    return (
+        "Ты — корпоративный помощник на основе внутренней базы знаний.\n"
+        "Ответь на вопрос сотрудника, опираясь ТОЛЬКО на приведённые ниже фрагменты.\n"
+        "Если фрагментов недостаточно для ответа, честно скажи, что не знаешь ответа.\n"
+        "Не придумывай факты и не используй внешние знания."
+        + examples_block
+        + "Фрагменты базы знаний:\n"
+        "{context}\n\n"
+        "Вопрос: {question}\n\n"
+        "Ответ:"
+    )
 
 
 class RAGAssistant:
@@ -116,7 +132,9 @@ class RAGAssistant:
         model_name: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        few_shot_examples: str | None = FEW_SHOT_EXAMPLES,
     ) -> None:
+        self._few_shot_examples = few_shot_examples
         self.persist_dir = Path(persist_dir)
         self.collection_name = collection_name
         self.embedding_model = embedding_model
@@ -165,14 +183,14 @@ class RAGAssistant:
         logger.info("Initializing YandexGPT model: %s", self._model_name)
         self.llm = ChatOpenAI(
             model=self._model_name,
-            api_key=self._api_key,
+            api_key=SecretStr(self._api_key),
             base_url=self._base_url,
             temperature=self._temperature,
-            max_tokens=self._max_tokens,
+            max_tokens=self._max_tokens,  # type: ignore[call-arg]
         )
 
         prompt = PromptTemplate(
-            template=PROMPT_TEMPLATE,
+            template=_build_prompt_template(self._few_shot_examples),
             input_variables=["context", "question"],
         )
 

@@ -27,6 +27,7 @@
 | `chroma.db/` | Персистентная БД ChromaDB (генерируется). |
 | `query.py` | CLI-скрипт: RAG-запрос + ответ от YandexGPT. |
 | `rag.py` | Reusable RAG-модуль, который можно импортировать в Telegram-бот. |
+| `few_shot_examples.py` | Статические few-shot примеры для промпта RetrievalQA. |
 | `.env.example` | Пример переменных окружения для работы с YandexGPT. |
 | `pyproject.toml` | Зависимости Poetry. |
 
@@ -124,6 +125,27 @@ poetry run python query.py "Кто такой Мясник из Беловежа
 
 ```bash
 poetry run python query.py --k 7 "Кто такой Мясник из Беловежа?"
+```
+
+#### 3.3. Few-shot prompting
+
+Промпт для `RetrievalQA` содержит несколько статических примеров из
+`few_shot_examples.py`:
+
+- как отвечать на основе одного релевантного фрагмента;
+- как синтезировать ответ из нескольких фрагментов;
+- как корректно отказываться отвечать, если в фрагментах нет нужной информации.
+
+Чтобы добавить новые примеры или убрать few-shot, отредактируйте
+`few_shot_examples.py`. В коде `RAGAssistant` можно передать свой набор
+примеров или отключить их:
+
+```python
+# со своими примерами
+assistant = RAGAssistant(few_shot_examples=custom_examples)
+
+# без few-shot
+assistant = RAGAssistant(few_shot_examples=None)
 ```
 
 ## Использование в Telegram-боте
